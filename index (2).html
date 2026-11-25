@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WanderPlan AI - Intelligent Travel Itinerary Planner</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React 18, ReactDOM, and Babel -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Plus Jakarta Sans', sans-serif; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 antialiased selection:bg-indigo-500 selection:text-white">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+    const API_BASE_URL = 'http://127.0.0.1:8000';
+
+    const PRESET_DESTINATIONS = ['Tokyo, Japan', 'Paris, France', 'Rome, Italy', 'Bali, Indonesia', 'Kyoto, Japan', 'Barcelona, Spain'];
+    const TRAVEL_STYLES = [
+      { id: 'Cultural & Historic', label: 'Cultural & Historic', icon: '🏛️' },
+      { id: 'Foodie & Culinary', label: 'Foodie & Culinary', icon: '🍜' },
+      { id: 'Adventure & Outdoors', label: 'Adventure & Outdoors', icon: '⛰️' },
+      { id: 'Relaxed & Leisure', label: 'Relaxed & Leisure', icon: '🌴' },
+      { id: 'Luxury & Wellness', label: 'Luxury & Wellness', icon: '✨' },
+      { id: 'Budget Backpacker', label: 'Budget Backpacker', icon: '🎒' }
+    ];
+    const POPULAR_INTERESTS = [
+      'Local Food & Cafes', 'Historic Temples', 'Museums & Art', 'Scenic Nature',
+      'Nightlife & Bars', 'Local Markets', 'Walking Tours', 'Photography', 'Beaches', 'Shopping'
+    ];
+
+    const CATEGORY_CONFIG = {
+      accommodation: { label: 'Accommodation', lightBg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-700', icon: '🏨' },
+      food: { label: 'Food & Dining', lightBg: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-700', icon: '🍜' },
+      activities: { label: 'Activities & Tours', lightBg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-700', icon: '🎟️' },
+      transportation: { label: 'Local Transport', lightBg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-700', icon: '🚇' },
+      miscellaneous: { label: 'Buffer & Shopping', lightBg: 'bg-pink-50', border: 'border-pink-200', text: 'text-pink-700', icon: '🛍️' }
+    };
+
+    function App() {
+      const [destination, setDestination] = useState('Tokyo, Japan');
+      const [days, setDays] = useState(5);
+      const [budget, setBudget] = useState('$2000');
+      const [travelStyle, setTravelStyle] = useState('Cultural & Historic');
+      const [selectedInterests, setSelectedInterests] = useState(['Local Food & Cafes', 'Historic Temples', 'Scenic Nature']);
+      const [customInterest, setCustomInterest] = useState('');
+      
+      const [isLoading, setIsLoading] = useState(false);
+      const [activeItinerary, setActiveItinerary] = useState(null);
+      const [savedTrips, setSavedTrips] = useState([]);
+      const [isSavedDrawerOpen, setIsSavedDrawerOpen] = useState(false);
+      const [isBackendOnline, setIsBackendOnline] = useState(false);
+      const [notification, setNotification] = useState(null);
+      const [activeDayIndex, setActiveDayIndex] = useState(0);
+
+      const itineraryRef = useRef(null);
+
+      // Check backend health & fetch saved trips
+      const checkHealth = async () => {
+        try {
+          const res = await fetch(`${API_BASE_URL}/health`);
+          setIsBackendOnline(res.ok);
+          return res.ok;
+        } catch {
+          setIsBackendOnline(false);
+          return false;
+        }
+      };
+
+      const fetchTrips = async () => {
+        try {
+          const res = await fetch(`${API_BASE_URL}/saved-trips`);
+          if (res.ok) {
+            const data = await res.json();
+            setSavedTrips(data.trips || []);
+          }
+        } catch (e) {
+          console.warn('Error fetching saved trips:', e);
+        }
+      };
+
+      useEffect(() => {
+        checkHealth().then(online => { if (online) fetchTrips(); });
+        const interval = setInterval(checkHealth, 15000);
+        return () => clearInterval(interval);
+      }, []);
+
+      const toggleInterest = (interest) => {
+        if (selectedInterests.includes(interest)) {
+          if (selectedInterests.length > 1) {
+            setSelectedInterests(selectedInterests.filter(i => i !== interest));
+          }
+        } else {
+          setSelectedInterests([...selectedInterests, interest]);
+        }
+      };
+
+      const handleAddCustomInterest = (e) => {
+        e.preventDefault();
+        const trimmed = customInterest.trim();
+        if (trimmed && !selectedInterests.includes(trimmed)) {
+          setSelectedInterests([...selectedInterests, trimmed]);
+          setCustomInterest('');
+        }
+      };
+
+      const handleGenerate = async (e) => {
+        e.preventDefault();
+        setIsLoading(true);
+        setNotification(null);
+
+        const payload = {
+          destination: destination.trim(),
+          days: parseInt(days, 10),
+          budget: budget.trim(),
+          travel_style: travelStyle,
+          interests: selectedInterests
+        };
+
+        try {
+          const res = await fetch(`${API_BASE_URL}/generate-itinerary`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          if (!res.ok) {
+            let detail = 'Generation failed';
+            try {
+              const err = await res.json();
+              detail = err.detail || JSON.stringify(err);
+            } catch {
+              detail = `Server returned HTTP ${res.status}`;
+            }
+            throw new Error(detail);
+          }
+
+          const data = await res.json();
+          if (data && data.itinerary) {
+            setActiveItinerary(data.itinerary);
+            setNotification({ type: 'success', text: data.message || 'Itinerary generated successfully!' });
+            fetchTrips();
+            setTimeout(() => {
+              if (itineraryRef.current) itineraryRef.current.scrollIntoView({ behavior: 'smooth' });
+            }, 100);
+          }
+        } catch (err) {
+          setNotification({
+            type: 'error',
+            text: err.message.includes('Failed to fetch')
+              ? 'Could not connect to http://127.0.0.1:8000. Please make sure the FastAPI server is running.'
+              : err.message
+          });
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      return (
+        <div className="min-h-screen flex flex-col bg-slate-50">
+          {/* Header */}
+          <header className="sticky top-0 z-40 bg-white/90 backdrop-blur-md border-b border-slate-200">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-white font-bold shadow-md shadow-indigo-200 text-lg">
+                  ✈️
+                </div>
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xl font-bold bg-gradient-to-r from-indigo-700 to-purple-700 bg-clip-text text-transparent">
+                      WanderPlan AI
+                    </span>
+                    <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                      Groq 70B
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 hidden sm:block">Intelligent Travel Itineraries & Budget Breakdown</p>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-3">
+                <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200">
+                  <span className={`w-2 h-2 rounded-full ${isBackendOnline ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+                  <span className="hidden sm:inline">{isBackendOnline ? 'Backend Online' : 'Backend Connecting...'}</span>
+                </div>
+
+                <button
+                  onClick={() => setIsSavedDrawerOpen(true)}
+                  className="flex items-center space-x-2 px-3.5 py-2 text-sm font-semibold rounded-xl bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 shadow-sm transition"
+                >
+                  <span>Saved Trips</span>
+                  {savedTrips.length > 0 && (
+                    <span className="px-1.5 py-0.2 bg-indigo-600 text-white text-xs font-bold rounded-full">
+                      {savedTrips.length}
+                    </span>
+                  )}
+                </button>
+              </div>
+            </div>
+          </header>
+
+          {/* Main content */}
+          <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+            {/* Notification */}
+            {notification && (
+              <div className={`p-4 rounded-2xl border flex items-center justify-between shadow-sm ${
+                notification.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'
+              }`}>
+                <div className="flex items-center space-x-2 text-sm font-medium">
+                  <span>{notification.type === 'success' ? '✨' : '⚠️'}</span>
+                  <span>{notification.text}</span>
+                </div>
+                <button onClick={() => setNotification(null)} className="text-slate-400 hover:text-slate-600">✕</button>
+              </div>
+            )}
+
+            {/* Travel Planning Form */}
+            <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-200 overflow-hidden">
+              <div className="bg-gradient-to-r from-indigo-600 via-indigo-700 to-purple-700 p-6 sm:p-8 text-white">
+                <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight">Plan Your Dream Journey</h2>
+                <p className="mt-2 text-indigo-100 text-sm sm:text-base max-w-2xl">
+                  Enter your destination, duration, budget, travel style, and interests to generate a structured itinerary with budget allocations.
+                </p>
+              </div>
+
+              <form onSubmit={handleGenerate} className="p-6 sm:p-8 space-y-6">
+                {/* Destination */}
+                <div>
+                  <label className="block text-sm font-semibold text-slate-800 mb-2">Where do you want to go?</label>
+                  <input
+                    type="text"
+                    value={destination}
+                    onChange={(e) => setDestination(e.target.value)}
+                    placeholder="e.g. Tokyo, Japan"
+                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900 text-sm font-medium"
+                    required
+                  />
+                  <div className="mt-2.5 flex flex-wrap gap-1.5 items-center">
+                    <span className="text-xs font-medium text-slate-500 mr-1">Popular:</span>
+                    {PRESET_DESTINATIONS.map(p => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => setDestination(p)}
+                        className={`text-xs px-2.5 py-1 rounded-lg transition font-medium ${
+                          destination === p ? 'bg-indigo-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Days and Budget */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-800 mb-2">Trip Duration (Days)</label>
+                    <div className="flex items-center space-x-3">
+                      <button
+                        type="button"
+                        onClick={() => setDays(Math.max(1, days - 1))}
+                        className="w-11 h-11 rounded-xl border border-slate-300 flex items-center justify-center font-bold text-slate-700 hover:bg-slate-100 text-lg"
+                      >-</button>
+                      <input
+                        type="number"
+                        min="1"
+                        max="30"
+                        value={days}
+                        onChange={(e) => setDays(Math.max(1, Math.min(30, parseInt(e.target.value) || 1)))}
+                        className="w-full text-center py-2.5 rounded-xl border border-slate-300 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setDays(Math.min(30, days + 1))}
+                        className="w-11 h-11 rounded-xl border border-slate-300 flex items-center justify-center font-bold text-slate-700 hover:bg-slate-100 text-lg"
+                      >+</button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-800 mb-2">Estimated Budget</label>
+                    <input
+                      type="text"
+                      value={budget}
+                      onChange={(e) => setBudget(e.target.value)}
+                      placeholder="e.g. $2000"
+                      className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900 text-sm font-medium"
+                      required
+                    />
+                    <div className="mt-2 flex gap-1.5">
+                      {['$800 (Budget)', '$2000 (Moderate)', '$4500 (Luxury)'].map(tier => (
+                        <button
+                          key={tier}
+                          type="button"
+                          onClick={() => setBudget(tier.split(' ')[0])}
+                          className="text-xs px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 hover:bg-slate-200 font-medium"
+                        >{tier}</button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Travel Style */}
+                <div>
+                  <label className="block text-sm font-semibold text-slate-800 mb-2.5">Travel Style</label>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                    {TRAVEL_STYLES.map(s => {
+                      const isSelected = travelStyle === s.id;
+                      return (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => setTravelStyle(s.id)}
+                          className={`p-3 rounded-xl border text-left flex items-center space-x-2.5 transition ${
+                            isSelected
+                              ? 'border-indigo-600 bg-indigo-50/70 text-indigo-900 ring-1 ring-indigo-600'
+                              : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
+                          }`}
+                        >
+                          <span className="text-xl">{s.icon}</span>
+                          <span className="text-xs sm:text-sm font-medium">{s.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Interests */}
+                <div>
+                  <label className="block text-sm font-semibold text-slate-800 mb-2">Interests & Activities</label>
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    {POPULAR_INTERESTS.map(interest => {
+                      const isSelected = selectedInterests.includes(interest);
+                      return (
+                        <button
+                          key={interest}
+                          type="button"
+                          onClick={() => toggleInterest(interest)}
+                          className={`px-3 py-1.5 rounded-xl text-xs sm:text-sm font-medium transition ${
+                            isSelected ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                          }`}
+                        >
+                          {isSelected && '✓ '} {interest}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="text"
+                      value={customInterest}
+                      onChange={(e) => setCustomInterest(e.target.value)}
+                      placeholder="Add another custom interest..."
+                      className="flex-1 px-3.5 py-2 text-xs sm:text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      onKeyDown={(e) => { if (e.key === 'Enter') handleAddCustomInterest(e); }}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddCustomInterest}
+                      className="px-3 py-2 bg-slate-800 hover:bg-slate-900 text-white text-xs sm:text-sm font-semibold rounded-xl"
+                    >Add</button>
+                  </div>
+                </div>
+
+                {/* Submit button */}
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className={`w-full py-4 rounded-xl text-white font-bold text-base sm:text-lg shadow-lg transition flex items-center justify-center space-x-2 ${
+                    isLoading
+                      ? 'bg-indigo-400 cursor-not-allowed'
+                      : 'bg-gradient-to-r from-indigo-600 via-indigo-700 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-indigo-300'
+                  }`}
+                >
+                  {isLoading ? '⏳ Generating AI Itinerary with Groq...' : '✨ Generate Personalized Itinerary'}
+                </button>
+              </form>
+            </div>
+
+            {/* Results Section */}
+            {activeItinerary ? (
+              <div ref={itineraryRef} className="space-y-8 pt-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-xs uppercase font-extrabold tracking-wider text-indigo-600 block">AI Generated Journey</span>
+                    <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900">Your Custom Trip Plan</h2>
+                  </div>
+                  <button onClick={() => window.print()} className="hidden sm:block px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700 hover:bg-slate-50 shadow-xs">
+                    🖨️ Print Plan
+                  </button>
+                </div>
+
+                {/* Budget Breakdown Cards */}
+                {activeItinerary.budget_split && (
+                  <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-200 p-6 sm:p-8">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-6 border-b border-slate-200 gap-4">
+                      <div>
+                        <h3 className="text-xl sm:text-2xl font-bold text-slate-900">Estimated Budget Breakdown</h3>
+                        <p className="mt-1 text-sm text-slate-500">Allocated estimates tailored for your journey.</p>
+                      </div>
+                      <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100 px-4 py-3 rounded-xl flex items-center space-x-2">
+                        <span className="text-xs uppercase font-semibold text-indigo-600">Total:</span>
+                        <span className="text-2xl font-extrabold text-indigo-900">{activeItinerary.budget_split.total_estimated_cost}</span>
+                        <span className="px-2 py-0.5 bg-indigo-600 text-white text-xs font-bold rounded">{activeItinerary.budget_split.currency || 'USD'}</span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mt-6">
+                      {['accommodation', 'food', 'activities', 'transportation', 'miscellaneous'].map(cat => {
+                        const item = activeItinerary.budget_split[cat];
+                        const cfg = CATEGORY_CONFIG[cat];
+                        if (!item || !cfg) return null;
+                        return (
+                          <div key={cat} className={`rounded-xl border ${cfg.border} ${cfg.lightBg} p-4 flex flex-col justify-between`}>
+                            <div>
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="text-lg">{cfg.icon}</span>
+                                {item.percentage && (
+                                  <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/80 text-slate-700 border border-slate-200">
+                                    {item.percentage}
+                                  </span>
+                                )}
+                              </div>
+                              <h4 className="text-xs font-semibold uppercase text-slate-600">{cfg.label}</h4>
+                              <div className="text-xl font-bold text-slate-900 mt-1">{item.allocated_amount}</div>
+                            </div>
+                            {item.description && (
+                              <p className="mt-3 text-xs text-slate-600 line-clamp-3 leading-relaxed border-t border-slate-200/60 pt-2">
+                                {item.description}
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Cost saving tips */}
+                    {activeItinerary.budget_split.cost_saving_tips?.length > 0 && (
+                      <div className="mt-6 p-4 rounded-xl bg-amber-50/70 border border-amber-200 text-amber-900">
+                        <div className="font-semibold text-sm text-amber-800 mb-1">💡 Insider Cost-Saving Tips</div>
+                        <ul className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                          {activeItinerary.budget_split.cost_saving_tips.map((t, idx) => (
+                            <li key={idx}>• {t}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Day-Wise Cards */}
+                {activeItinerary.day_wise_plan && (
+                  <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-200 p-6 sm:p-8 space-y-6">
+                    <div className="border-b border-slate-200 pb-6">
+                      <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+                        <span className="px-3 py-1 rounded-full text-xs font-bold bg-indigo-100 text-indigo-700">
+                          {activeItinerary.travel_style} • {activeItinerary.duration_days} Days
+                        </span>
+                        <span className="text-sm font-semibold text-slate-500">{activeItinerary.destination}</span>
+                      </div>
+                      <h3 className="text-2xl sm:text-3xl font-extrabold text-slate-900">{activeItinerary.trip_title}</h3>
+                      {activeItinerary.summary && (
+                        <p className="mt-2 text-slate-600 text-sm leading-relaxed">{activeItinerary.summary}</p>
+                      )}
+                    </div>
+
+                    {/* Day selector pills */}
+                    <div className="flex items-center space-x-2 overflow-x-auto pb-2">
+                      <button
+                        type="button"
+                        onClick={() => setActiveDayIndex('all')}
+                        className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap ${
+                          activeDayIndex === 'all' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >View All Days</button>
+                      {activeItinerary.day_wise_plan.map((d, i) => (
+                        <button
+                          key={d.day || i}
+                          type="button"
+                          onClick={() => setActiveDayIndex(i)}
+                          className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap ${
+                            activeDayIndex === i ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          }`}
+                        >Day {d.day || i + 1}</button>
+                      ))}
+                    </div>
+
+                    {/* Day content */}
+                    <div className="space-y-6">
+                      {(activeDayIndex === 'all' ? activeItinerary.day_wise_plan : [activeItinerary.day_wise_plan[activeDayIndex]]).map(d => {
+                        if (!d) return null;
+                        return (
+                          <div key={d.day} className="rounded-2xl border border-slate-200 bg-slate-50/50 p-5 sm:p-7 space-y-5">
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-200/80 pb-3">
+                              <div>
+                                <h4 className="text-lg font-bold text-slate-900">Day {d.day}: {d.title}</h4>
+                                {d.theme_overview && <p className="text-xs text-slate-500">{d.theme_overview}</p>}
+                              </div>
+                              {d.daily_estimated_spend && (
+                                <span className="text-xs font-semibold px-2.5 py-1 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 self-start sm:self-auto">
+                                  Est. Spend: {d.daily_estimated_spend}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Recommended meals */}
+                            {d.recommended_meals && (
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                {Object.entries(d.recommended_meals).map(([mealType, mealDesc]) => (
+                                  <div key={mealType} className="p-3 bg-white rounded-xl border border-slate-200 text-xs">
+                                    <span className="uppercase font-bold text-indigo-600 block mb-0.5">🍽️ {mealType}</span>
+                                    <span className="text-slate-700">{mealDesc}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Activities */}
+                            <div className="space-y-3">
+                              {d.activities?.map((act, actIdx) => (
+                                <div key={actIdx} className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs">
+                                  <div className="flex items-center justify-between gap-2 mb-1">
+                                    <div className="flex items-center space-x-2">
+                                      <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 text-indigo-700">
+                                        {act.time_slot}
+                                      </span>
+                                      <h5 className="font-bold text-slate-900 text-sm">{act.title}</h5>
+                                    </div>
+                                    {act.estimated_cost && (
+                                      <span className="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-700">
+                                        💵 {act.estimated_cost}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {act.location && (
+                                    <div className="text-xs text-slate-500 mb-1">📍 {act.location}</div>
+                                  )}
+                                  <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">{act.description}</p>
+                                  {act.insider_tip && (
+                                    <div className="mt-2 p-2 rounded bg-indigo-50/70 text-xs text-indigo-900">
+                                      💡 <strong>Insider Tip:</strong> {act.insider_tip}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-center py-12 px-4 rounded-2xl border border-dashed border-slate-300 bg-white/50">
+                <div className="text-4xl mb-2">✈️</div>
+                <h3 className="text-lg font-bold text-slate-800">Ready to build your next itinerary?</h3>
+                <p className="text-sm text-slate-500 mt-1 max-w-md mx-auto">
+                  Fill in your travel preferences above and click "Generate Personalized Itinerary" to get started!
+                </p>
+              </div>
+            )}
+          </main>
+
+          {/* Saved Trips Drawer */}
+          {isSavedDrawerOpen && (
+            <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex justify-end">
+              <div className="w-full max-w-md bg-white h-full shadow-2xl flex flex-col">
+                <div className="p-6 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+                  <div>
+                    <h3 className="text-lg font-bold text-slate-900">Saved Trips</h3>
+                    <p className="text-xs text-slate-500">Persisted in Supabase</p>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <button onClick={fetchTrips} className="p-2 text-slate-500 hover:text-slate-800">🔄</button>
+                    <button onClick={() => setIsSavedDrawerOpen(false)} className="p-2 text-slate-500 hover:text-slate-800 font-bold">✕</button>
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                  {savedTrips.length === 0 ? (
+                    <div className="text-center py-16 text-slate-400">
+                      <div className="text-3xl mb-2">🗺️</div>
+                      <p className="text-sm font-semibold">No saved trips yet</p>
+                    </div>
+                  ) : (
+                    savedTrips.map((t, idx) => (
+                      <div key={t.id || idx} className="p-4 rounded-2xl border border-slate-200 hover:border-indigo-300 transition">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <h4 className="font-bold text-slate-900">{t.destination}</h4>
+                            <p className="text-xs text-slate-500">{t.days} Days • {t.travel_style}</p>
+                          </div>
+                          <span className="text-xs px-2 py-0.5 rounded bg-slate-100 font-semibold">{t.budget}</span>
+                        </div>
+                        <div className="flex justify-between items-center mt-3 pt-2 border-t border-slate-100 text-xs">
+                          <span className="text-slate-400">{t.created_at ? new Date(t.created_at).toLocaleDateString() : 'Saved trip'}</span>
+                          <button
+                            onClick={() => {
+                              if (t.itinerary_data) {
+                                setActiveItinerary(t.itinerary_data);
+                                setIsSavedDrawerOpen(false);
+                              }
+                            }}
+                            className="font-bold text-indigo-600 hover:underline"
+                          >
+                            Load Plan →
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <footer className="border-t border-slate-200 bg-white py-6 mt-12 text-center text-xs text-slate-500">
+            WanderPlan AI • Powered by FastAPI, Groq (Llama-3.3-70b-versatile), and Supabase
+          </footer>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
